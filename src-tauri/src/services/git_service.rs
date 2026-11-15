@@ -78,7 +78,7 @@ impl GitService {
     {
         let url = url.to_string();
         let path = path.to_path_buf();
-        let git2 = tauri::async_runtime::spawn_blocking(move || {
+        let git2 = crate::runtime::spawn_blocking(move || {
             Git2Service::clone(&url, &path, progress_cb, ssh_credentials)
         })
         .await

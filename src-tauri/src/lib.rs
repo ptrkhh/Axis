@@ -5,11 +5,13 @@
 mod commands;
 mod error;
 mod events;
+pub mod host;
 mod menu;
 #[cfg(feature = "integration")]
 pub mod models;
 #[cfg(not(feature = "integration"))]
 mod models;
+pub mod runtime;
 #[cfg(feature = "integration")]
 pub mod services;
 #[cfg(not(feature = "integration"))]

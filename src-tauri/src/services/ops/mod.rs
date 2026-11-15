@@ -43,7 +43,7 @@ impl RepoOperations {
         R: Send + 'static,
     {
         let service = self.service.clone();
-        tauri::async_runtime::spawn_blocking(move || f(service.git2()))
+        crate::runtime::spawn_blocking(move || f(service.git2()))
             .await
             .unwrap_or_else(|e| panic!("git2 task panicked: {e}"))
     }

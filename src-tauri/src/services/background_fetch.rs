@@ -1,11 +1,11 @@
 use crate::events::RemoteFetchedEvent;
 use crate::models::{FetchOptions, ListRemoteOptions, SshCredentials, SshKeyFormat};
+use crate::runtime::JoinHandle;
 use crate::services::SshKeyService;
 use crate::state::{AppState, RepositoryCache};
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Manager};
 use tauri_specta::Event;
 
@@ -34,7 +34,7 @@ impl BackgroundFetchService {
 
         log::info!("Starting background fetch service with {interval_minutes} minute interval");
 
-        let handle = tauri::async_runtime::spawn(async move {
+        let handle = crate::runtime::spawn(async move {
             let mut interval =
                 tokio::time::interval(Duration::from_secs(u64::from(interval_minutes) * 60));
 

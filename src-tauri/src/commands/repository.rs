@@ -221,7 +221,7 @@ pub async fn get_recent_repositories(state: State<'_, AppState>) -> Result<Vec<R
 
     let handles: Vec<_> = rows
         .into_iter()
-        .map(|row| tauri::async_runtime::spawn_blocking(move || RecentRepository::from_row(row)))
+        .map(|row| crate::runtime::spawn_blocking(move || RecentRepository::from_row(row)))
         .collect();
 
     let mut repos = Vec::with_capacity(handles.len());

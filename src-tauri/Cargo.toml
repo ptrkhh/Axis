@@ -102,3 +102,6 @@ tauri-plugin-updater = "2"
 # Switch to OpenSSL backend with vendored build to guarantee Ed25519 support.
 [target.'cfg(target_os = "windows")'.dependencies]
 libssh2-sys = { version = "0.3", features = ["openssl-on-win32", "vendored-openssl"] }
+
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }
