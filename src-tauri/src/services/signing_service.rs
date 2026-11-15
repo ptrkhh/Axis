@@ -71,6 +71,10 @@ impl SigningService {
         #[cfg(target_os = "linux")]
         let candidates = vec!["/usr/bin/gpg2", "/usr/bin/gpg", "gpg2", "gpg"];
 
+        // Termux installs to $PREFIX/bin, resolved through PATH
+        #[cfg(target_os = "android")]
+        let candidates = vec!["gpg2", "gpg"];
+
         for candidate in candidates {
             let path = Path::new(candidate);
             if path.is_absolute() && path.exists() {

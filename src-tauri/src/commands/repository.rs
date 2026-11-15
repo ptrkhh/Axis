@@ -7,6 +7,7 @@ use crate::models::{
 use crate::services::{GitService, ProgressContext};
 use crate::state::AppState;
 use std::path::PathBuf;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", test))]
 use std::process::Command;
 use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
@@ -325,6 +326,14 @@ pub async fn open_terminal(path: String) -> Result<()> {
         }
     }
 
+    #[cfg(target_os = "android")]
+    {
+        Err(AxisError::Other(
+            "Opening a terminal is not supported on this platform".to_string(),
+        ))
+    }
+
+    #[cfg(not(target_os = "android"))]
     Ok(())
 }
 
@@ -379,5 +388,17 @@ mod tests {
         assert!(!args.iter().any(|arg| arg.contains("cd /d")));
         assert!(!args.iter().any(|arg| arg.contains('&')));
         assert!(!args.iter().any(|arg| arg.contains("repo")));
+    }
+
+    #[cfg(target_os = "android")]
+    #[tokio::test]
+    async fn open_terminal_is_unsupported_on_android() {
+        let err = open_terminal(env!("CARGO_MANIFEST_DIR").to_string())
+            .await
+            .expect_err("opening a terminal should be unsupported on Android");
+        assert!(
+            matches!(&err, AxisError::Other(m) if m == "Opening a terminal is not supported on this platform"),
+            "unexpected error: {err:?}"
+        );
     }
 }

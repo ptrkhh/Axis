@@ -349,14 +349,18 @@ pub fn run() {
     let extra_handler: Box<tauri::ipc::InvokeHandler<tauri::Wry>> =
         Box::new(tauri::generate_handler![crate::commands::get_file_blob]);
 
-    let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {}));
+    let builder = tauri::Builder::default();
+
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {}));
 
     #[cfg(feature = "e2e")]
     let builder = builder.plugin(tauri_plugin_webdriver::init());
 
-    builder
-        .plugin(tauri_plugin_updater::Builder::new().build())
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+
+    let builder = builder
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -401,14 +405,21 @@ pub fn run() {
             app.manage(app_state);
 
             // Create and set the application menu
-            let menu = menu::create_menu(app.handle()).expect("Failed to create menu");
-            app.set_menu(menu).expect("Failed to set menu");
+            #[cfg(desktop)]
+            {
+                let menu = menu::create_menu(app.handle()).expect("Failed to create menu");
+                app.set_menu(menu).expect("Failed to set menu");
+            }
 
             Ok(())
-        })
-        .on_menu_event(|app, event| {
-            menu::handle_menu_event(app, event.id());
-        })
+        });
+
+    #[cfg(desktop)]
+    let builder = builder.on_menu_event(|app, event| {
+        menu::handle_menu_event(app, event.id());
+    });
+
+    builder
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

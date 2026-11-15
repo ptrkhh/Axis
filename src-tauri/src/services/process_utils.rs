@@ -15,6 +15,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Get extended PATH that includes common tool installation directories.
 /// This is needed because GUI apps on macOS don't inherit shell PATH.
+/// On Android the PATH is returned unchanged (the agent sets it at startup).
 fn get_extended_path() -> String {
     let current_path = env::var("PATH").unwrap_or_default();
 
@@ -71,6 +72,11 @@ fn get_extended_path() -> String {
             }
         }
         paths.join(":")
+    }
+
+    #[cfg(target_os = "android")]
+    {
+        current_path
     }
 }
 

@@ -1,19 +1,33 @@
 use crate::error::{AxisError, Result};
+#[cfg(desktop)]
 use crate::events::UpdateDownloadProgressEvent;
 use crate::models::UpdateInfo;
+#[cfg(desktop)]
 use crate::state::AppState;
-use tauri::{AppHandle, State};
+use tauri::AppHandle;
+#[cfg(desktop)]
+use tauri::State;
+#[cfg(desktop)]
 use tauri_plugin_updater::UpdaterExt;
+#[cfg(desktop)]
 use tauri_specta::Event;
+#[cfg(desktop)]
 use url::Url;
 
+#[cfg(mobile)]
+const UPDATES_UNSUPPORTED: &str = "Updates are not supported on this platform";
+
+#[cfg(desktop)]
 const NIGHTLY_CHANNEL_ENDPOINT: &str =
     "https://github.com/Choochmeque/Axis/releases/download/nightly/latest.json";
+#[cfg(desktop)]
 const STABLE_CHANNEL_ENDPOINT: &str =
     "https://github.com/Choochmeque/Axis/releases/latest/download/latest.json";
 
+#[cfg(desktop)]
 const NIGHTLY_PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlFQzBEREUyNTJGMTMxOEIKUldTTE1mRlM0dDNBbm5mMEMwZTFOazV6VmNWRitBNzU3K1NqcTZ2eDlyQnp1eXFQT2Y3UFEwK0IK";
 
+#[cfg(desktop)]
 fn get_update_endpoint() -> String {
     let channel = option_env!("AXIS_UPDATE_CHANNEL").unwrap_or("nightly");
     match channel {
@@ -22,12 +36,14 @@ fn get_update_endpoint() -> String {
     }
 }
 
+#[cfg(desktop)]
 fn get_update_pubkey() -> String {
     option_env!("TAURI_SIGNING_PUBLIC_KEY")
         .unwrap_or(NIGHTLY_PUBKEY)
         .to_string()
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 #[specta::specta]
 pub async fn check_for_update(
@@ -65,6 +81,7 @@ pub async fn check_for_update(
     }
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 #[specta::specta]
 pub async fn download_and_install_update(app: AppHandle, state: State<'_, AppState>) -> Result<()> {
@@ -95,6 +112,24 @@ pub async fn download_and_install_update(app: AppHandle, state: State<'_, AppSta
     Ok(())
 }
 
+#[cfg(mobile)]
+#[tauri::command]
+#[specta::specta]
+pub async fn check_for_update() -> Result<Option<UpdateInfo>> {
+    log::warn!("check_for_update called, but updates are not supported on this platform");
+    Err(AxisError::Other(UPDATES_UNSUPPORTED.to_string()))
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+#[specta::specta]
+pub async fn download_and_install_update() -> Result<()> {
+    log::warn!(
+        "download_and_install_update called, but updates are not supported on this platform"
+    );
+    Err(AxisError::Other(UPDATES_UNSUPPORTED.to_string()))
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn restart_app(app: AppHandle) -> Result<()> {
@@ -105,6 +140,7 @@ pub async fn restart_app(app: AppHandle) -> Result<()> {
 mod tests {
     use super::*;
 
+    #[cfg(desktop)]
     #[test]
     fn test_get_update_endpoint_default_is_nightly() {
         let endpoint = get_update_endpoint();
@@ -115,6 +151,7 @@ mod tests {
         );
     }
 
+    #[cfg(desktop)]
     #[test]
     fn test_get_update_pubkey_default() {
         let pubkey = get_update_pubkey();
@@ -122,10 +159,35 @@ mod tests {
         assert_eq!(pubkey, NIGHTLY_PUBKEY);
     }
 
+    #[cfg(desktop)]
     #[test]
     fn test_default_pubkey_is_valid_base64() {
         use base64::Engine;
         let result = base64::engine::general_purpose::STANDARD.decode(NIGHTLY_PUBKEY);
         assert!(result.is_ok(), "NIGHTLY_PUBKEY should be valid base64");
+    }
+
+    #[cfg(mobile)]
+    #[tokio::test]
+    async fn test_check_for_update_unsupported_on_mobile() {
+        let err = check_for_update()
+            .await
+            .expect_err("updates should be unsupported on mobile");
+        assert!(
+            matches!(&err, AxisError::Other(m) if m == "Updates are not supported on this platform"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[cfg(mobile)]
+    #[tokio::test]
+    async fn test_download_and_install_update_unsupported_on_mobile() {
+        let err = download_and_install_update()
+            .await
+            .expect_err("updates should be unsupported on mobile");
+        assert!(
+            matches!(&err, AxisError::Other(m) if m == "Updates are not supported on this platform"),
+            "unexpected error: {err:?}"
+        );
     }
 }

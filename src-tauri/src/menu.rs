@@ -1,18 +1,23 @@
+#[cfg(desktop)]
 use crate::events::MenuActionEvent;
 use serde::{Deserialize, Serialize};
 use specta::Type;
+#[cfg(desktop)]
 use std::str::FromStr;
 use strum::{Display, EnumString};
+#[cfg(desktop)]
 use tauri::{
     menu::{Menu, MenuId, MenuItem, PredefinedMenuItem, Submenu},
     AppHandle, Wry,
 };
+#[cfg(desktop)]
 use tauri_specta::Event;
 
 /// Menu item IDs for custom actions
 #[derive(Debug, Display, EnumString, Deserialize, Serialize, Type)]
 #[serde(rename_all = "PascalCase")]
 #[strum(serialize_all = "PascalCase")]
+#[cfg_attr(mobile, allow(dead_code))] // still exported to api.ts; only the desktop menu constructs it
 pub enum MenuAction {
     NewWindow,
     OpenRepository,
@@ -33,6 +38,7 @@ pub enum MenuAction {
 }
 
 /// Create the application menu
+#[cfg(desktop)]
 pub fn create_menu(app: &AppHandle<Wry>) -> tauri::Result<Menu<Wry>> {
     let menu = Menu::new(app)?;
 
@@ -116,6 +122,7 @@ fn create_app_menu(app: &AppHandle<Wry>) -> tauri::Result<Submenu<Wry>> {
     Ok(submenu)
 }
 
+#[cfg(desktop)]
 fn create_file_menu(app: &AppHandle<Wry>) -> tauri::Result<Submenu<Wry>> {
     let new_window = MenuItem::with_id(
         app,
@@ -193,6 +200,7 @@ fn create_file_menu(app: &AppHandle<Wry>) -> tauri::Result<Submenu<Wry>> {
     }
 }
 
+#[cfg(desktop)]
 fn create_edit_menu(app: &AppHandle<Wry>) -> tauri::Result<Submenu<Wry>> {
     let undo = PredefinedMenuItem::undo(app, Some("Undo"))?;
     let redo = PredefinedMenuItem::redo(app, Some("Redo"))?;
@@ -222,6 +230,7 @@ fn create_edit_menu(app: &AppHandle<Wry>) -> tauri::Result<Submenu<Wry>> {
     Ok(submenu)
 }
 
+#[cfg(desktop)]
 fn create_view_menu(app: &AppHandle<Wry>) -> tauri::Result<Submenu<Wry>> {
     let refresh = MenuItem::with_id(
         app,
@@ -257,6 +266,7 @@ fn create_view_menu(app: &AppHandle<Wry>) -> tauri::Result<Submenu<Wry>> {
     Ok(submenu)
 }
 
+#[cfg(desktop)]
 fn create_repository_menu(app: &AppHandle<Wry>) -> tauri::Result<Submenu<Wry>> {
     let fetch = MenuItem::with_id(
         app,
@@ -340,6 +350,7 @@ fn create_repository_menu(app: &AppHandle<Wry>) -> tauri::Result<Submenu<Wry>> {
     Ok(submenu)
 }
 
+#[cfg(desktop)]
 fn create_branch_menu(app: &AppHandle<Wry>) -> tauri::Result<Submenu<Wry>> {
     let new_branch = MenuItem::with_id(
         app,
@@ -362,6 +373,7 @@ fn create_branch_menu(app: &AppHandle<Wry>) -> tauri::Result<Submenu<Wry>> {
     Ok(submenu)
 }
 
+#[cfg(desktop)]
 fn create_window_menu(app: &AppHandle<Wry>) -> tauri::Result<Submenu<Wry>> {
     let minimize = PredefinedMenuItem::minimize(app, Some("Minimize"))?;
     let zoom = PredefinedMenuItem::maximize(app, Some("Zoom"))?;
@@ -371,12 +383,14 @@ fn create_window_menu(app: &AppHandle<Wry>) -> tauri::Result<Submenu<Wry>> {
     Ok(submenu)
 }
 
+#[cfg(desktop)]
 fn create_help_menu(app: &AppHandle<Wry>) -> tauri::Result<Submenu<Wry>> {
     let submenu = Submenu::new(app, "Help", true)?;
     Ok(submenu)
 }
 
 /// Handle menu events
+#[cfg(desktop)]
 pub fn handle_menu_event(app: &AppHandle<Wry>, id: &MenuId) {
     let id_str = id.as_ref();
 

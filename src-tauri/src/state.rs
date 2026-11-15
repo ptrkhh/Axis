@@ -7,7 +7,9 @@ use crate::services::{
 };
 use crate::storage::Database;
 use crate::storage::RecentRepositoryRow;
-use parking_lot::{Mutex, RwLock};
+#[cfg(desktop)]
+use parking_lot::Mutex;
+use parking_lot::RwLock;
 use secrecy::SecretString;
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -190,6 +192,7 @@ pub struct AppState {
     /// In-memory cache for SSH key passphrases (`SecretString` zeroes memory on drop)
     ssh_passphrase_cache: RwLock<HashMap<String, SecretString>>,
     /// Pending update ready to download & install
+    #[cfg(desktop)]
     pending_update: Mutex<Option<tauri_plugin_updater::Update>>,
 }
 
@@ -210,6 +213,7 @@ impl AppState {
             integration_service: RwLock::new(Some(Arc::new(integration_service))),
             progress_registry: Arc::new(ProgressRegistry::new()),
             ssh_passphrase_cache: RwLock::new(HashMap::new()),
+            #[cfg(desktop)]
             pending_update: Mutex::new(None),
         }
     }
@@ -434,11 +438,13 @@ impl AppState {
     // ==================== Pending Update ====================
 
     /// Store a pending update for later download & install
+    #[cfg(desktop)]
     pub fn set_pending_update(&self, update: tauri_plugin_updater::Update) {
         *self.pending_update.lock() = Some(update);
     }
 
     /// Take the pending update (removes it from state)
+    #[cfg(desktop)]
     pub fn take_pending_update(&self) -> Option<tauri_plugin_updater::Update> {
         self.pending_update.lock().take()
     }
@@ -987,6 +993,7 @@ mod tests {
 
     // ==================== Pending Update Tests ====================
 
+    #[cfg(desktop)]
     #[tokio::test]
     async fn test_pending_update_initially_none() {
         let db = crate::storage::Database::open_in_memory()
@@ -997,6 +1004,7 @@ mod tests {
         assert!(state.take_pending_update().is_none());
     }
 
+    #[cfg(desktop)]
     #[tokio::test]
     async fn test_take_pending_update_returns_none_when_empty() {
         let db = crate::storage::Database::open_in_memory()
