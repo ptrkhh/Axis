@@ -110,6 +110,39 @@ Android 16 / SDK 36, as the `adb shell` user:
   `models/hooks.rs`): Android has no `/bin/sh`, so they rely on the agent
   inheriting Termux's `LD_PRELOAD` (termux-exec), `PATH` and `TMPDIR`.
 
+### Termux-user verification (2026-11-14)
+
+Closes the "Not yet verified" item above. The same crates were built natively
+inside Termux (host `aarch64-linux-android`, same vendored-OpenSSL features)
+and run as the Termux user (uid `u0_a341`) on a Samsung SM-X810, Android 16,
+from the `Axis` checkout, in two launch modes: direct (`./termux-check`, from
+a non-login shell that inherited Termux's environment) and agent-style
+(`nohup ./termux-check > ~/check.log 2>&1 &`).
+
+| Check | Direct | `nohup` |
+|---|---|---|
+| 1 CA registration (120 certs from `/apex/com.android.conscrypt/cacerts`), `git2` open + status of `$PWD` | OK | OK |
+| 1b `git2` HTTPS connect to a public repo (TLS verified with the registered CAs) | OK | OK |
+| 2 `git2` fetch over SSH (`git@github.com:...`; no agent, fell back to `~/.ssh/id_rsa`) | OK | OK |
+| 3 `git --version` via inherited `PATH` (Termux git 2.56.0) | OK | OK |
+| 4 `#!/bin/sh` script written to `$TMPDIR`, run with `std::process::Command` | OK (`hook-ok`) | OK (`hook-ok`) |
+| 5 env seen by the process | `LD_PRELOAD=$PREFIX/lib/libtermux-exec-ld-preload.so`, `PATH` starts with `$PREFIX/bin`, `TMPDIR=$PREFIX/tmp`, `HOME=/data/data/com.termux/files/home`, `SSH_AUTH_SOCK` unset | same |
+| 6a `notify` recursive watch of `$PWD` sees a probe file | OK | OK |
+| 6b `turso` write and read back in `$HOME` | OK | OK |
+
+- `ssh_key_from_agent` is not enough on its own: there is no agent in Termux
+  by default, so the credential callback must fall back to the key file. The
+  SSH fetch also needs a `certificate_check` callback that accepts the host
+  key (as `build_certificate_check_callback` does); without one libgit2
+  rejects it with "invalid or unknown remote ssh hostkey".
+- Check 4 passes, but not only because of termux-exec: on this device
+  `/bin` is a symlink to `/system/bin`, so `#!/bin/sh` resolves to Android's
+  own shell (it also passed with `LD_PRELOAD` unset). A `#!/usr/bin/env sh`
+  script fails with "bad interpreter" without `LD_PRELOAD` and works with it.
+  The agent must still inherit `LD_PRELOAD`, and scripts must not assume
+  `/bin/sh` is Termux's `sh`.
+- Building vendored OpenSSL in Termux needs `pkg install perl`.
+
 ## Architecture
 
 ```
