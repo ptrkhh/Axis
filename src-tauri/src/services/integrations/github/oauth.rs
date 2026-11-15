@@ -1,12 +1,11 @@
 use std::sync::Arc;
 
-use tauri::AppHandle;
-use tauri_plugin_opener::OpenerExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::{oneshot, Mutex};
 
 use crate::error::{AxisError, Result};
+use crate::host::Host;
 
 /// GitHub OAuth scopes required by the application
 const GITHUB_SCOPES: &[&str] = &["repo", "read:user", "notifications"];
@@ -97,7 +96,7 @@ impl OAuthFlow {
     /// 4. Exchange the code for an access token using PKCE
     ///
     /// The flow can be cancelled by calling `cancel()`.
-    pub async fn start(&self, app_handle: &AppHandle) -> Result<String> {
+    pub async fn start(&self, host: &dyn Host) -> Result<String> {
         // Create cancellation channel
         let (cancel_tx, cancel_rx) = oneshot::channel();
         {
@@ -136,9 +135,7 @@ impl OAuthFlow {
         );
 
         // Open browser
-        app_handle
-            .opener()
-            .open_url(&auth_url, None::<&str>)
+        host.open_url(&auth_url)
             .map_err(|e| AxisError::OAuthError(format!("Failed to open browser: {e}")))?;
 
         log::info!("Opened browser for GitHub OAuth");
@@ -324,5 +321,51 @@ impl OAuthFlow {
         }
 
         (code, state, error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host::RecordingHost;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn start_opens_auth_url_via_host() {
+        let flow = Arc::new(OAuthFlow::new("test-client".to_string()));
+        let host = RecordingHost::new();
+        let task = tokio::spawn({
+            let flow = Arc::clone(&flow);
+            let host = host.clone();
+            async move { flow.start(host.as_ref()).await }
+        });
+
+        let mut url = None;
+        for _ in 0..300 {
+            url = host.opened_urls.lock().first().cloned();
+            if url.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let url = url.expect("start should open the auth URL via the host");
+        assert!(url.starts_with("https://github.com/login/oauth/authorize"));
+        assert_eq!(host.opened_urls.lock().len(), 1);
+
+        task.abort();
+        assert!(task
+            .await
+            .expect_err("task should be aborted")
+            .is_cancelled());
+
+        // The aborted future dropped its listener, so the callback port is free again.
+        let encoded_port = url
+            .split("localhost%3A")
+            .nth(1)
+            .and_then(|rest| rest.split("%2F").next())
+            .expect("auth URL should carry the callback port");
+        TcpListener::bind(format!("127.0.0.1:{encoded_port}"))
+            .await
+            .expect("callback port should be released after abort");
     }
 }

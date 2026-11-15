@@ -398,11 +398,8 @@ pub fn run() {
 
             let app_state = AppState::new(database);
 
-            // Attach the host so commands can emit progress and hook events
+            // Attach the host so services can emit events and open URLs
             app_state.attach_host(Arc::new(TauriHost(app.handle().clone())), app_data_dir);
-
-            // Set the app handle so GitService can create file watchers
-            app_state.set_app_handle(app.handle().clone());
 
             // Start background fetch service with configured interval
             if let Err(e) = app_state.start_background_fetch(auto_fetch_interval) {

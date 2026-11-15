@@ -1,4 +1,4 @@
-use tauri::{AppHandle, State};
+use tauri::State;
 
 use crate::error::Result;
 use crate::models::{
@@ -18,12 +18,12 @@ use crate::state::AppState;
 #[tauri::command]
 #[specta::specta]
 pub async fn integration_start_oauth(
-    app_handle: AppHandle,
     state: State<'_, AppState>,
     provider: ProviderType,
 ) -> Result<()> {
     let service = state.integration_service()?;
-    service.start_oauth(provider, &app_handle).await
+    let host = state.host()?;
+    service.start_oauth(provider, host.as_ref()).await
 }
 
 /// Cancel an in-progress OAuth flow

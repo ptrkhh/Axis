@@ -3,8 +3,8 @@ use crate::host::HostHandle;
 use crate::models::{AppSettings, ListRemoteOptions, Repository, SshCredentials};
 use crate::services::ops::RepoOperations;
 use crate::services::{
-    AvatarService, BackgroundFetchService, CommitCache, GitService, IntegrationService,
-    ProgressRegistry, SignatureVerificationCache, SshKeyService,
+    AvatarService, BackgroundFetchService, CommitCache, FetchContext, GitService,
+    IntegrationService, ProgressRegistry, SignatureVerificationCache, SshKeyService, WatchContext,
 };
 use crate::storage::Database;
 use crate::storage::RecentRepositoryRow;
@@ -16,7 +16,6 @@ use std::collections::HashMap;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tauri::AppHandle;
 
 /// Wrapper that holds an `Arc<GitService>` and a shared `RwLock` for read/write coordination.
 ///
@@ -114,7 +113,7 @@ impl RepositoryCache {
     pub fn get_or_open(
         &self,
         path: &Path,
-        app_handle: &AppHandle,
+        ctx: &WatchContext,
         is_active: bool,
     ) -> Result<GitServiceHandle> {
         // Check if already cached
@@ -126,7 +125,7 @@ impl RepositoryCache {
         }
 
         // Open and cache
-        let service = GitService::open(path, app_handle.clone(), is_active)?;
+        let service = GitService::open(path, ctx.clone(), is_active)?;
         let handle = GitServiceHandle::new(service);
 
         self.repos
@@ -179,21 +178,45 @@ impl Default for RepositoryCache {
     }
 }
 
+/// In-memory cache for SSH key passphrases (`SecretString` zeroes memory on drop)
+#[derive(Default)]
+pub struct SshPassphraseCache {
+    entries: RwLock<HashMap<String, SecretString>>,
+}
+
+impl SshPassphraseCache {
+    /// Get a cached passphrase (returns clone)
+    pub fn get(&self, key_path: &str) -> Option<SecretString> {
+        self.entries.read().get(key_path).cloned()
+    }
+
+    pub fn set(&self, key_path: String, passphrase: SecretString) {
+        self.entries.write().insert(key_path, passphrase);
+    }
+
+    pub fn remove(&self, key_path: &str) {
+        self.entries.write().remove(key_path);
+    }
+
+    #[cfg(test)]
+    pub fn clear(&self) {
+        self.entries.write().clear();
+    }
+}
+
 pub struct AppState {
     active_repository_path: RwLock<Option<PathBuf>>,
     repository_cache: Arc<RepositoryCache>,
     commit_cache: Arc<CommitCache>,
     signature_verification_cache: Arc<SignatureVerificationCache>,
     database: Arc<Database>,
-    app_handle: RwLock<Option<AppHandle>>,
     host: RwLock<Option<HostHandle>>,
     app_data_dir: RwLock<Option<PathBuf>>,
     background_fetch: BackgroundFetchService,
     avatar_service: RwLock<Option<Arc<AvatarService>>>,
     integration_service: RwLock<Option<Arc<IntegrationService>>>,
     progress_registry: Arc<ProgressRegistry>,
-    /// In-memory cache for SSH key passphrases (`SecretString` zeroes memory on drop)
-    ssh_passphrase_cache: RwLock<HashMap<String, SecretString>>,
+    ssh_passphrase_cache: Arc<SshPassphraseCache>,
     /// Pending update ready to download & install
     #[cfg(desktop)]
     pending_update: Mutex<Option<tauri_plugin_updater::Update>>,
@@ -210,14 +233,13 @@ impl AppState {
             commit_cache: Arc::new(CommitCache::new()),
             signature_verification_cache: Arc::new(SignatureVerificationCache::new()),
             database,
-            app_handle: RwLock::new(None),
             host: RwLock::new(None),
             app_data_dir: RwLock::new(None),
             background_fetch: BackgroundFetchService::new(),
             avatar_service: RwLock::new(None),
             integration_service: RwLock::new(Some(Arc::new(integration_service))),
             progress_registry: Arc::new(ProgressRegistry::new()),
-            ssh_passphrase_cache: RwLock::new(HashMap::new()),
+            ssh_passphrase_cache: Arc::new(SshPassphraseCache::default()),
             #[cfg(desktop)]
             pending_update: Mutex::new(None),
         }
@@ -249,17 +271,21 @@ impl AppState {
             .ok_or_else(|| AxisError::Other("Host not attached".to_string()))
     }
 
-    /// Set the app handle; kept only for the file watcher and background fetch until they take a Host
-    pub fn set_app_handle(&self, app_handle: AppHandle) {
-        *self.app_handle.write() = Some(app_handle);
+    /// Context for creating repository file watchers
+    pub fn watch_context(&self) -> Result<WatchContext> {
+        Ok(WatchContext {
+            host: self.host()?,
+            commit_cache: self.commit_cache(),
+        })
     }
 
-    /// Get the app handle (only for the file watcher and background fetch)
-    fn get_app_handle(&self) -> Result<AppHandle> {
-        self.app_handle
-            .read()
-            .clone()
-            .ok_or_else(|| AxisError::Other("App handle not set".to_string()))
+    fn fetch_context(&self) -> Result<FetchContext> {
+        Ok(FetchContext {
+            cache: self.repository_cache(),
+            database: Arc::clone(&self.database),
+            passphrases: Arc::clone(&self.ssh_passphrase_cache),
+            host: self.host()?,
+        })
     }
 
     /// Get the repository cache (for background fetch service)
@@ -300,10 +326,10 @@ impl AppState {
 
     /// Set/switch the active repository (adds to cache if needed)
     pub async fn switch_active_repository(&self, path: &Path) -> Result<Repository> {
-        let app_handle = self.get_app_handle()?;
+        let ctx = self.watch_context()?;
 
         // Ensure the repo is cached
-        let handle = self.repository_cache.get_or_open(path, &app_handle, true)?;
+        let handle = self.repository_cache.get_or_open(path, &ctx, true)?;
 
         // Update active flags
         self.repository_cache.set_active(path);
@@ -345,8 +371,8 @@ impl AppState {
     /// Get the `GitService` handle for the active repository
     pub fn get_git_service(&self) -> Result<GitServiceHandle> {
         let path = self.ensure_repository_open()?;
-        let app_handle = self.get_app_handle()?;
-        self.repository_cache.get_or_open(&path, &app_handle, true)
+        let ctx = self.watch_context()?;
+        self.repository_cache.get_or_open(&path, &ctx, true)
     }
 
     pub async fn add_recent_repository(&self, path: &Path, name: &str) -> Result<()> {
@@ -395,9 +421,8 @@ impl AppState {
 
     /// Start the background fetch service
     pub fn start_background_fetch(&self, interval_minutes: u32) -> Result<()> {
-        let app_handle = self.get_app_handle()?;
         self.background_fetch
-            .start(self.repository_cache(), app_handle, interval_minutes);
+            .start(self.fetch_context()?, interval_minutes);
         Ok(())
     }
 
@@ -409,9 +434,8 @@ impl AppState {
 
     /// Restart the background fetch service with a new interval
     pub fn restart_background_fetch(&self, interval_minutes: u32) -> Result<()> {
-        let app_handle = self.get_app_handle()?;
         self.background_fetch
-            .restart(self.repository_cache(), app_handle, interval_minutes);
+            .restart(self.fetch_context()?, interval_minutes);
         Ok(())
     }
 
@@ -478,28 +502,26 @@ impl AppState {
 
     /// Cache an SSH key passphrase in secure memory
     pub fn cache_ssh_passphrase(&self, key_path: &str, passphrase: String) {
-        let secret = SecretString::from(passphrase);
         self.ssh_passphrase_cache
-            .write()
-            .insert(key_path.to_string(), secret);
+            .set(key_path.to_string(), SecretString::from(passphrase));
         log::debug!("Cached passphrase for SSH key: {key_path}");
     }
 
     /// Get a cached passphrase for an SSH key (returns clone)
     pub fn get_cached_ssh_passphrase(&self, key_path: &str) -> Option<SecretString> {
-        self.ssh_passphrase_cache.read().get(key_path).cloned()
+        self.ssh_passphrase_cache.get(key_path)
     }
 
     /// Clear a cached passphrase (`SecretString` zeroes memory on drop)
     pub fn clear_cached_ssh_passphrase(&self, key_path: &str) {
-        self.ssh_passphrase_cache.write().remove(key_path);
+        self.ssh_passphrase_cache.remove(key_path);
         log::debug!("Cleared cached passphrase for SSH key: {key_path}");
     }
 
     #[cfg(test)]
     /// Clear all cached passphrases (all `SecretStrings` zeroed on drop)
     pub fn clear_all_ssh_passphrases(&self) {
-        self.ssh_passphrase_cache.write().clear();
+        self.ssh_passphrase_cache.clear();
         log::debug!("Cleared all cached SSH passphrases");
     }
 
@@ -604,7 +626,7 @@ mod tests {
     // so we use integration tests with temporary repos for those.
 
     // ==================== AppState Basic Tests ====================
-    // Note: AppState requires Database and AppHandle, testing basic error paths
+    // Note: AppState requires Database and an attached Host, testing basic error paths
 
     #[tokio::test]
     async fn test_app_state_get_current_repository_path_none() {
@@ -630,17 +652,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_app_state_get_app_handle_error() {
-        let db = crate::storage::Database::open_in_memory()
-            .await
-            .expect("should create in-memory db");
-        let state = AppState::new(db);
-
-        let result = state.get_app_handle();
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
     async fn host_before_attach_is_error() {
         let db = crate::storage::Database::open_in_memory()
             .await
@@ -653,7 +664,9 @@ mod tests {
         );
 
         *state.active_repository_path.write() = Some(PathBuf::from("/test/repo"));
-        assert!(matches!(state.get_git_service(), Err(AxisError::Other(_))));
+        assert!(
+            matches!(state.get_git_service(), Err(AxisError::Other(m)) if m == "Host not attached")
+        );
     }
 
     #[tokio::test]

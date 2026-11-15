@@ -2,7 +2,8 @@ use crate::events::{
     FilesChangedEvent, HeadChangedEvent, IndexChangedEvent, RefChangedEvent, RepositoryDirtyEvent,
     WatchErrorEvent,
 };
-use crate::state::AppState;
+use crate::host::{self, HostHandle};
+use crate::services::CommitCache;
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::Mutex;
 use std::path::PathBuf;
@@ -11,8 +12,13 @@ use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use tauri::{AppHandle, Manager};
-use tauri_specta::Event as _;
+
+/// What a file watcher needs: where to emit events and which commit cache to invalidate.
+#[derive(Clone)]
+pub struct WatchContext {
+    pub host: HostHandle,
+    pub commit_cache: Arc<CommitCache>,
+}
 
 /// Per-repository file watcher that emits events based on active status.
 /// Active repos get detailed events; inactive repos get a single `RepositoryDirtyEvent`.
@@ -34,7 +40,7 @@ impl FileWatcher {
     }
 
     /// Create a new file watcher for a repository
-    pub fn new(repo_path: PathBuf, app_handle: AppHandle, is_active: bool) -> notify::Result<Self> {
+    pub fn new(repo_path: PathBuf, ctx: WatchContext, is_active: bool) -> notify::Result<Self> {
         let is_active_flag = Arc::new(AtomicBool::new(is_active));
 
         let (tx, rx) = channel::<notify::Result<Event>>();
@@ -49,8 +55,7 @@ impl FileWatcher {
         let watcher_arc = Arc::new(Mutex::new(Some(watcher)));
 
         // Spawn thread to handle events
-        let handle =
-            Self::spawn_event_handler(rx, repo_path, app_handle, Arc::clone(&is_active_flag));
+        let handle = Self::spawn_event_handler(rx, repo_path, ctx, Arc::clone(&is_active_flag));
         let handle_arc = Arc::new(Mutex::new(Some(handle)));
 
         Ok(Self {
@@ -80,7 +85,7 @@ impl FileWatcher {
     fn spawn_event_handler(
         rx: Receiver<notify::Result<Event>>,
         repo_path: PathBuf,
-        app_handle: AppHandle,
+        ctx: WatchContext,
         is_active: Arc<AtomicBool>,
     ) -> thread::JoinHandle<()> {
         let git_dir = repo_path.join(".git");
@@ -134,20 +139,24 @@ impl FileWatcher {
                             } else {
                                 // Inactive repo: emit dirty event once per batch
                                 if !dirty_emitted {
-                                    let _ = RepositoryDirtyEvent {
-                                        path: repo_path.to_string_lossy().to_string(),
-                                    }
-                                    .emit(&app_handle);
+                                    host::emit(
+                                        ctx.host.as_ref(),
+                                        &RepositoryDirtyEvent {
+                                            path: repo_path.to_string_lossy().to_string(),
+                                        },
+                                    );
                                     dirty_emitted = true;
                                 }
                             }
                         }
                     }
                     Ok(Err(e)) => {
-                        let _ = WatchErrorEvent {
-                            message: e.to_string(),
-                        }
-                        .emit(&app_handle);
+                        host::emit(
+                            ctx.host.as_ref(),
+                            &WatchErrorEvent {
+                                message: e.to_string(),
+                            },
+                        );
                     }
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                         // Timeout - flush pending changes if any and reset dirty flag
@@ -168,26 +177,22 @@ impl FileWatcher {
                 if has_pending && last_emit.elapsed() >= debounce_duration {
                     // Emit git events
                     if pending_index_changed {
-                        let _ = IndexChangedEvent {}.emit(&app_handle);
+                        host::emit(ctx.host.as_ref(), &IndexChangedEvent {});
                         pending_index_changed = false;
                     }
                     if pending_head_changed {
-                        let _ = HeadChangedEvent {}.emit(&app_handle);
+                        host::emit(ctx.host.as_ref(), &HeadChangedEvent {});
                         pending_head_changed = false;
 
                         // Invalidate commit cache on HEAD change
-                        if let Some(state) = app_handle.try_state::<AppState>() {
-                            state.commit_cache().invalidate_repo(&repo_path);
-                        }
+                        ctx.commit_cache.invalidate_repo(&repo_path);
                     }
                     if !pending_refs.is_empty() {
                         // Invalidate commit cache on ref changes
-                        if let Some(state) = app_handle.try_state::<AppState>() {
-                            state.commit_cache().invalidate_repo(&repo_path);
-                        }
+                        ctx.commit_cache.invalidate_repo(&repo_path);
                     }
                     for ref_name in std::mem::take(&mut pending_refs) {
-                        let _ = RefChangedEvent { ref_name }.emit(&app_handle);
+                        host::emit(ctx.host.as_ref(), &RefChangedEvent { ref_name });
                     }
 
                     // Emit file changes
@@ -202,7 +207,7 @@ impl FileWatcher {
                             .collect();
 
                         if !paths.is_empty() {
-                            let _ = FilesChangedEvent { paths }.emit(&app_handle);
+                            host::emit(ctx.host.as_ref(), &FilesChangedEvent { paths });
                         }
                     }
                     last_emit = std::time::Instant::now();
@@ -215,5 +220,95 @@ impl FileWatcher {
 impl Drop for FileWatcher {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host::RecordingHost;
+    use crate::models::GraphOptions;
+    use crate::services::CommitCacheEntry;
+    use std::time::Instant;
+
+    /// Polls `cond` for up to 3 s, returning whether it became true.
+    fn wait_until(cond: impl Fn() -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            if cond() {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        cond()
+    }
+
+    fn temp_repo() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("should create temp dir");
+        git2::Repository::init(dir.path()).expect("should init repo");
+        let path = dir
+            .path()
+            .canonicalize()
+            .expect("should canonicalize repo path");
+        (dir, path)
+    }
+
+    #[test]
+    fn head_change_invalidates_commit_cache_and_emits() {
+        let (_dir, path) = temp_repo();
+        let host = RecordingHost::new();
+        let commit_cache = Arc::new(CommitCache::new());
+        let key = CommitCache::build_key(&path, &GraphOptions::default());
+        commit_cache.set(
+            key.clone(),
+            CommitCacheEntry {
+                commits: Vec::new(),
+                max_lane: 0,
+                has_more: false,
+                is_prefetching: AtomicBool::new(false),
+            },
+        );
+        assert!(commit_cache.get(&key).is_some());
+
+        let ctx = WatchContext {
+            host: host.clone(),
+            commit_cache: Arc::clone(&commit_cache),
+        };
+        let watcher = FileWatcher::new(path.clone(), ctx, true).expect("should create watcher");
+
+        std::fs::write(path.join(".git").join("HEAD"), "ref: refs/heads/other\n")
+            .expect("should rewrite HEAD");
+
+        assert!(
+            wait_until(|| host.names().iter().any(|n| n == "head-changed-event")),
+            "head-changed-event not emitted, got {:?}",
+            host.names()
+        );
+        assert!(
+            wait_until(|| commit_cache.get(&key).is_none()),
+            "commit cache entry should be invalidated"
+        );
+        watcher.stop();
+    }
+
+    #[test]
+    fn inactive_repo_emits_repository_dirty_only() {
+        let (_dir, path) = temp_repo();
+        let host = RecordingHost::new();
+        let ctx = WatchContext {
+            host: host.clone(),
+            commit_cache: Arc::new(CommitCache::new()),
+        };
+        let watcher = FileWatcher::new(path.clone(), ctx, false).expect("should create watcher");
+
+        std::fs::write(path.join("file.txt"), "hello").expect("should write file");
+
+        assert!(
+            wait_until(|| host.names().iter().any(|n| n == "repository-dirty-event")),
+            "repository-dirty-event not emitted, got {:?}",
+            host.names()
+        );
+        assert!(!host.names().iter().any(|n| n == "files-changed-event"));
+        watcher.stop();
     }
 }

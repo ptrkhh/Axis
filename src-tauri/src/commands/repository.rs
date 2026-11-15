@@ -63,7 +63,6 @@ pub async fn open_repository(state: State<'_, AppState>, path: String) -> Result
 #[tauri::command]
 #[specta::specta]
 pub async fn init_repository(
-    app_handle: AppHandle,
     state: State<'_, AppState>,
     path: String,
     bare: bool,
@@ -71,7 +70,7 @@ pub async fn init_repository(
     let expanded_path = shellexpand::tilde(&path).to_string();
     let path = PathBuf::from(&expanded_path);
 
-    let service = GitService::init(&path, bare, app_handle)?;
+    let service = GitService::init(&path, bare, state.watch_context()?)?;
     let repo_info = service.git2().get_repository_info()?;
 
     // Canonicalize path after creation to ensure consistent storage
@@ -89,7 +88,6 @@ pub async fn init_repository(
 #[tauri::command]
 #[specta::specta]
 pub async fn clone_repository(
-    app_handle: AppHandle,
     state: State<'_, AppState>,
     url: String,
     path: String,
@@ -119,7 +117,14 @@ pub async fn clone_repository(
     });
 
     let callback = ctx.make_receive_callback(GitOperationType::Clone);
-    let result = GitService::clone(&url, &path, app_handle, Some(callback), ssh_creds).await;
+    let result = GitService::clone(
+        &url,
+        &path,
+        state.watch_context()?,
+        Some(callback),
+        ssh_creds,
+    )
+    .await;
 
     ctx.handle_result(&result, GitOperationType::Clone);
 

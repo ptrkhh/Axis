@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tauri::AppHandle;
 use tokio::sync::RwLock;
 
 use crate::error::{AxisError, Result};
+use crate::host::Host;
 use crate::models::ProviderType;
 use crate::storage::Database;
 
@@ -55,13 +55,9 @@ impl IntegrationService {
     }
 
     /// Start OAuth flow for a provider
-    pub async fn start_oauth(
-        &self,
-        provider_type: ProviderType,
-        app_handle: &AppHandle,
-    ) -> Result<()> {
+    pub async fn start_oauth(&self, provider_type: ProviderType, host: &dyn Host) -> Result<()> {
         match provider_type {
-            ProviderType::GitHub => self.start_github_oauth(app_handle).await,
+            ProviderType::GitHub => self.start_github_oauth(host).await,
             _ => Err(AxisError::IntegrationError(format!(
                 "{provider_type:?} OAuth not yet implemented"
             ))),
@@ -69,7 +65,7 @@ impl IntegrationService {
     }
 
     /// Start GitHub OAuth flow (internal)
-    async fn start_github_oauth(&self, app_handle: &AppHandle) -> Result<()> {
+    async fn start_github_oauth(&self, host: &dyn Host) -> Result<()> {
         let client_id = dotenvy_macro::dotenv!("GITHUB_CLIENT_ID");
         if client_id.is_empty() {
             return Err(AxisError::OAuthError(
@@ -87,7 +83,7 @@ impl IntegrationService {
         let token = {
             let guard = self.oauth_flow.read().await;
             if let Some(flow) = guard.as_ref() {
-                flow.start(app_handle).await?
+                flow.start(host).await?
             } else {
                 return Err(AxisError::OAuthError(
                     "OAuth flow not initialized".to_string(),

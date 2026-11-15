@@ -1,13 +1,21 @@
 use crate::events::RemoteFetchedEvent;
+use crate::host::{self, HostHandle};
 use crate::models::{FetchOptions, ListRemoteOptions, SshCredentials, SshKeyFormat};
 use crate::runtime::JoinHandle;
 use crate::services::SshKeyService;
-use crate::state::{AppState, RepositoryCache};
+use crate::state::{RepositoryCache, SshPassphraseCache};
+use crate::storage::Database;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::{AppHandle, Manager};
-use tauri_specta::Event;
+
+/// What the background fetch task needs from the app.
+pub struct FetchContext {
+    pub cache: Arc<RepositoryCache>,
+    pub database: Arc<Database>,
+    pub passphrases: Arc<SshPassphraseCache>,
+    pub host: HostHandle,
+}
 
 /// Background service for periodically fetching all cached repositories
 pub struct BackgroundFetchService {
@@ -26,7 +34,7 @@ impl BackgroundFetchService {
     // Allow many lines: this is a self-contained async background task that processes
     // repositories in a loop. Extracting parts would obscure the task's structure.
     #[allow(clippy::too_many_lines)]
-    pub fn start(&self, cache: Arc<RepositoryCache>, app_handle: AppHandle, interval_minutes: u32) {
+    pub fn start(&self, ctx: FetchContext, interval_minutes: u32) {
         if interval_minutes == 0 {
             log::info!("Background fetch disabled (interval is 0)");
             return;
@@ -44,14 +52,14 @@ impl BackgroundFetchService {
                 log::debug!("Background fetch: checking cached repositories");
 
                 // Get all cached repository paths
-                let paths = cache.list_paths();
+                let paths = ctx.cache.list_paths();
 
                 for path in paths {
                     // Get the service handle from cache
-                    if let Some(handle) = cache.get(&path) {
-                        let app_state = app_handle.state::<AppState>();
+                    if let Some(handle) = ctx.cache.get(&path) {
                         let repo_path_str = path.to_string_lossy().to_string();
-                        let default_ssh_key = app_state
+                        let default_ssh_key = ctx
+                            .database
                             .get_settings()
                             .await
                             .map_or(None, |s| s.default_ssh_key);
@@ -78,7 +86,7 @@ impl BackgroundFetchService {
 
                         for remote in remotes {
                             let ssh_key = SshKeyService::resolve_ssh_key(
-                                app_state.database(),
+                                &ctx.database,
                                 &repo_path_str,
                                 &remote.name,
                                 default_ssh_key.as_ref(),
@@ -94,7 +102,7 @@ impl BackgroundFetchService {
                                     SshKeyFormat::EncryptedPem | SshKeyFormat::EncryptedOpenSsh,
                                 ) = format
                                 {
-                                    if app_state.get_cached_ssh_passphrase(key_path).is_none() {
+                                    if ctx.passphrases.get(key_path).is_none() {
                                         log::debug!(
                                             "Background fetch: skipping remote {} (encrypted key, no cached passphrase)",
                                             remote.name
@@ -105,7 +113,7 @@ impl BackgroundFetchService {
                             }
 
                             let ssh_creds = ssh_key.map(|key_path| {
-                                let passphrase = app_state.get_cached_ssh_passphrase(&key_path);
+                                let passphrase = ctx.passphrases.get(&key_path);
                                 SshCredentials {
                                     key_path,
                                     passphrase,
@@ -147,13 +155,13 @@ impl BackgroundFetchService {
                             );
 
                             // Emit event for this repo
-                            let event = RemoteFetchedEvent {
-                                path: path.to_string_lossy().to_string(),
-                                new_commits: total_updates,
-                            };
-                            if let Err(e) = event.emit(&app_handle) {
-                                log::error!("Failed to emit RemoteFetchedEvent: {e}");
-                            }
+                            host::emit(
+                                ctx.host.as_ref(),
+                                &RemoteFetchedEvent {
+                                    path: path.to_string_lossy().to_string(),
+                                    new_commits: total_updates,
+                                },
+                            );
                         }
                     }
                 }
@@ -173,14 +181,9 @@ impl BackgroundFetchService {
     }
 
     /// Restart the background fetch task with a new interval
-    pub fn restart(
-        &self,
-        cache: Arc<RepositoryCache>,
-        app_handle: AppHandle,
-        interval_minutes: u32,
-    ) {
+    pub fn restart(&self, ctx: FetchContext, interval_minutes: u32) {
         self.stop();
-        self.start(cache, app_handle, interval_minutes);
+        self.start(ctx, interval_minutes);
     }
 
     #[cfg(test)]
@@ -193,5 +196,42 @@ impl BackgroundFetchService {
 impl Default for BackgroundFetchService {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host::RecordingHost;
+
+    #[tokio::test]
+    async fn start_and_stop_with_fetch_context() {
+        let cache = Arc::new(RepositoryCache::new());
+        let ctx = FetchContext {
+            cache: Arc::clone(&cache),
+            database: Arc::new(
+                Database::open_in_memory()
+                    .await
+                    .expect("should create in-memory db"),
+            ),
+            passphrases: Arc::new(SshPassphraseCache::default()),
+            host: RecordingHost::new(),
+        };
+        let service = BackgroundFetchService::new();
+
+        service.start(ctx, 1);
+        assert!(service.is_running());
+
+        service.stop();
+        assert!(!service.is_running());
+
+        // The aborted task drops its context; poll until its clone of the cache is released.
+        for _ in 0..300 {
+            if Arc::strong_count(&cache) == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(Arc::strong_count(&cache), 1, "fetch task should be dropped");
     }
 }

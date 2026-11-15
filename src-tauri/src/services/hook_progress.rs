@@ -86,7 +86,7 @@ mod tests {
 
     #[test]
     fn test_operation_id_is_uuid() {
-        // We can't fully test without AppHandle, but we can verify the UUID format
+        // Verify the UUID v4 format used for operation ids
         let uuid = uuid::Uuid::new_v4().to_string();
         assert_eq!(uuid.len(), 36); // UUID v4 string length
         assert!(uuid.contains('-'));

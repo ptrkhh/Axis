@@ -1,8 +1,7 @@
 use crate::error::{AxisError, Result};
 use crate::models::SshCredentials;
-use crate::services::{FileWatcher, Git2Service, GitCliService, HookService};
+use crate::services::{FileWatcher, Git2Service, GitCliService, HookService, WatchContext};
 use std::path::Path;
-use tauri::AppHandle;
 
 /// Unified service for Git operations, combining:
 /// - `Git2Service` (libgit2 operations)
@@ -17,7 +16,7 @@ pub struct GitService {
 }
 
 impl GitService {
-    /// Create `GitService` for testing (no `FileWatcher`/`AppHandle` required)
+    /// Create `GitService` for testing (no `FileWatcher`/`WatchContext` required)
     #[cfg(feature = "integration")]
     pub fn new_for_test(path: &Path) -> Result<Self> {
         let git2 = Git2Service::open(path)?;
@@ -33,11 +32,11 @@ impl GitService {
     }
 
     /// Open a repository and create all associated services
-    pub fn open(path: &Path, app_handle: AppHandle, is_active: bool) -> Result<Self> {
+    pub fn open(path: &Path, ctx: WatchContext, is_active: bool) -> Result<Self> {
         let git2 = Git2Service::open(path)?;
         let git_cli = GitCliService::new(path);
         let hook = HookService::new(&git2.repo()?);
-        let watcher = FileWatcher::new(path.to_path_buf(), app_handle, is_active)
+        let watcher = FileWatcher::new(path.to_path_buf(), ctx, is_active)
             .map_err(|e| AxisError::Other(format!("Failed to create file watcher: {e}")))?;
 
         Ok(Self {
@@ -49,11 +48,11 @@ impl GitService {
     }
 
     /// Initialize a new repository and create all associated services
-    pub fn init(path: &Path, bare: bool, app_handle: AppHandle) -> Result<Self> {
+    pub fn init(path: &Path, bare: bool, ctx: WatchContext) -> Result<Self> {
         let git2 = Git2Service::init(path, bare)?;
         let git_cli = GitCliService::new(path);
         let hook = HookService::new(&git2.repo()?);
-        let watcher = FileWatcher::new(path.to_path_buf(), app_handle, true)
+        let watcher = FileWatcher::new(path.to_path_buf(), ctx, true)
             .map_err(|e| AxisError::Other(format!("Failed to create file watcher: {e}")))?;
 
         Ok(Self {
@@ -69,7 +68,7 @@ impl GitService {
     pub async fn clone<F>(
         url: &str,
         path: &Path,
-        app_handle: AppHandle,
+        ctx: WatchContext,
         progress_cb: Option<F>,
         ssh_credentials: Option<SshCredentials>,
     ) -> Result<Self>
@@ -87,7 +86,7 @@ impl GitService {
         let path = git2.path().to_path_buf();
         let git_cli = GitCliService::new(&path);
         let hook = HookService::new(&git2.repo()?);
-        let watcher = FileWatcher::new(path, app_handle, true)
+        let watcher = FileWatcher::new(path, ctx, true)
             .map_err(|e| AxisError::Other(format!("Failed to create file watcher: {e}")))?;
 
         Ok(Self {
