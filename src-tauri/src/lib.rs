@@ -19,7 +19,9 @@ mod services;
 mod state;
 mod storage;
 
+use host::TauriHost;
 use state::AppState;
+use std::sync::Arc;
 use storage::Database;
 use tauri::Manager;
 
@@ -395,6 +397,9 @@ pub fn run() {
                 .map_or(5, |s| s.auto_fetch_interval);
 
             let app_state = AppState::new(database);
+
+            // Attach the host so commands can emit progress and hook events
+            app_state.attach_host(Arc::new(TauriHost(app.handle().clone())), app_data_dir);
 
             // Set the app handle so GitService can create file watchers
             app_state.set_app_handle(app.handle().clone());

@@ -1,28 +1,26 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use tauri::AppHandle;
-use tauri_specta::Event;
-
 use crate::events::{HookProgressEvent, HookStage};
+use crate::host::{self, HostHandle};
 use crate::models::GitHookType;
 use crate::services::ProgressRegistry;
 
 /// Emitter for hook progress events with cancellation support
 pub struct HookProgressEmitter {
     operation_id: String,
-    app_handle: AppHandle,
+    host: HostHandle,
     cancel_token: Arc<AtomicBool>,
     registry: Arc<ProgressRegistry>,
 }
 
 impl HookProgressEmitter {
-    pub fn new(app_handle: AppHandle, registry: Arc<ProgressRegistry>) -> Self {
+    pub fn new(host: HostHandle, registry: Arc<ProgressRegistry>) -> Self {
         let operation_id = uuid::Uuid::new_v4().to_string();
         let cancel_token = registry.register(&operation_id);
         Self {
             operation_id,
-            app_handle,
+            host,
             cancel_token,
             registry,
         }
@@ -37,18 +35,14 @@ impl HookProgressEmitter {
     pub fn emit_running(&self, hook_type: GitHookType) {
         let event =
             HookProgressEvent::new(self.operation_id.clone(), hook_type, HookStage::Running);
-        if let Err(e) = event.emit(&self.app_handle) {
-            log::error!("Failed to emit hook running event: {e}");
-        }
+        host::emit(self.host.as_ref(), &event);
     }
 
     /// Emit a complete event
     pub fn emit_complete(&self, hook_type: GitHookType) {
         let event =
             HookProgressEvent::new(self.operation_id.clone(), hook_type, HookStage::Complete);
-        if let Err(e) = event.emit(&self.app_handle) {
-            log::error!("Failed to emit hook complete event: {e}");
-        }
+        host::emit(self.host.as_ref(), &event);
     }
 
     /// Emit a failed event with message
@@ -56,18 +50,14 @@ impl HookProgressEmitter {
         let mut event =
             HookProgressEvent::new(self.operation_id.clone(), hook_type, HookStage::Failed);
         event.message = Some(message.to_string());
-        if let Err(e) = event.emit(&self.app_handle) {
-            log::error!("Failed to emit hook failed event: {e}");
-        }
+        host::emit(self.host.as_ref(), &event);
     }
 
     /// Emit a cancelled event
     pub fn emit_cancelled(&self, hook_type: GitHookType) {
         let event =
             HookProgressEvent::new(self.operation_id.clone(), hook_type, HookStage::Cancelled);
-        if let Err(e) = event.emit(&self.app_handle) {
-            log::error!("Failed to emit hook cancelled event: {e}");
-        }
+        host::emit(self.host.as_ref(), &event);
     }
 }
 
@@ -80,6 +70,17 @@ impl Drop for HookProgressEmitter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::host::RecordingHost;
+
+    #[test]
+    fn emit_running_reaches_host() {
+        let host = RecordingHost::new();
+        let emitter = HookProgressEmitter::new(host.clone(), Arc::new(ProgressRegistry::new()));
+
+        emitter.emit_running(GitHookType::PreCommit);
+
+        assert_eq!(host.names(), ["hook-progress-event"]);
+    }
 
     // ==================== HookProgressEmitter Tests ====================
 

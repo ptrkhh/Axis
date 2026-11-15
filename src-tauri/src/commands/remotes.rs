@@ -102,9 +102,9 @@ pub async fn fetch_remote(
     remote_name: String,
     options: FetchOptions,
 ) -> Result<FetchResult> {
-    let app_handle = state.get_app_handle()?;
+    let host = state.host()?;
     let ssh_creds = state.resolve_ssh_credentials(&remote_name).await?;
-    let ctx = ProgressContext::new(app_handle, state.progress_registry());
+    let ctx = ProgressContext::new(host, state.progress_registry());
 
     ctx.emit(GitOperationType::Fetch, ProgressStage::Connecting, None);
 
@@ -137,7 +137,7 @@ pub async fn push_remote(
     // Use explicit bypass_hooks param if provided, otherwise use settings
     let skip_hooks = bypass_hooks.unwrap_or(settings.bypass_hooks);
 
-    let app_handle = state.get_app_handle()?;
+    let host = state.host()?;
 
     // Run pre-push hook (can abort)
     if !skip_hooks {
@@ -157,7 +157,7 @@ pub async fn push_remote(
             .build_push_refs_stdin(&remote_name, &refspecs)
             .await;
 
-        let emitter = HookProgressEmitter::new(app_handle.clone(), state.progress_registry());
+        let emitter = HookProgressEmitter::new(host.clone(), state.progress_registry());
         let hook_result = git_service
             .write()
             .await
@@ -180,7 +180,7 @@ pub async fn push_remote(
             )));
         }
     }
-    let ctx = ProgressContext::new(app_handle, state.progress_registry());
+    let ctx = ProgressContext::new(host, state.progress_registry());
 
     ctx.emit(GitOperationType::Push, ProgressStage::Connecting, None);
 
@@ -211,7 +211,7 @@ pub async fn push_current_branch(
     // Use explicit bypass_hooks param if provided, otherwise use settings
     let skip_hooks = bypass_hooks.unwrap_or(settings.bypass_hooks);
 
-    let app_handle = state.get_app_handle()?;
+    let host = state.host()?;
 
     // Run pre-push hook (can abort)
     if !skip_hooks {
@@ -236,7 +236,7 @@ pub async fn push_current_branch(
                 .build_push_refs_stdin(&remote_name, &refspecs)
                 .await;
 
-            let emitter = HookProgressEmitter::new(app_handle.clone(), state.progress_registry());
+            let emitter = HookProgressEmitter::new(host.clone(), state.progress_registry());
             let hook_result = git_service
                 .write()
                 .await
@@ -260,7 +260,7 @@ pub async fn push_current_branch(
             }
         }
     }
-    let ctx = ProgressContext::new(app_handle, state.progress_registry());
+    let ctx = ProgressContext::new(host, state.progress_registry());
 
     ctx.emit(GitOperationType::Push, ProgressStage::Connecting, None);
 
@@ -284,9 +284,9 @@ pub async fn pull_remote(
     branch_name: String,
     options: PullOptions,
 ) -> Result<()> {
-    let app_handle = state.get_app_handle()?;
+    let host = state.host()?;
     let ssh_creds = state.resolve_ssh_credentials(&remote_name).await?;
-    let ctx = ProgressContext::new(app_handle, state.progress_registry());
+    let ctx = ProgressContext::new(host, state.progress_registry());
 
     ctx.emit(GitOperationType::Pull, ProgressStage::Connecting, None);
 
@@ -306,7 +306,7 @@ pub async fn pull_remote(
 #[tauri::command]
 #[specta::specta]
 pub async fn fetch_all(state: State<'_, AppState>) -> Result<Vec<FetchResult>> {
-    let app_handle = state.get_app_handle()?;
+    let host = state.host()?;
     let git_service = state.get_git_service()?;
     let guard = git_service.write().await;
 
@@ -317,7 +317,7 @@ pub async fn fetch_all(state: State<'_, AppState>) -> Result<Vec<FetchResult>> {
     let mut errors = Vec::new();
     for remote in remotes {
         let ssh_creds = state.resolve_ssh_credentials(&remote.name).await?;
-        let ctx = ProgressContext::new(app_handle.clone(), state.progress_registry());
+        let ctx = ProgressContext::new(host.clone(), state.progress_registry());
         ctx.emit(GitOperationType::Fetch, ProgressStage::Connecting, None);
 
         let cb = ctx.make_receive_callback(GitOperationType::Fetch);

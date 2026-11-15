@@ -72,8 +72,8 @@ pub async fn merge_branch(
 
     // Run post-merge hook if merge was successful (informational, don't fail)
     if merge_result.success && !settings.bypass_hooks {
-        let app_handle = state.get_app_handle()?;
-        let emitter = HookProgressEmitter::new(app_handle, state.progress_registry());
+        let host = state.host()?;
+        let emitter = HookProgressEmitter::new(host, state.progress_registry());
         let is_squash = options.squash;
         let hook_result = guard.run_post_merge(is_squash, Some(&emitter)).await;
         if !hook_result.skipped && !hook_result.success {
@@ -141,8 +141,8 @@ pub async fn rebase_branch(
 
     // Run pre-rebase hook (can abort)
     if !skip_hooks {
-        let app_handle = state.get_app_handle()?;
-        let emitter = HookProgressEmitter::new(app_handle, state.progress_registry());
+        let host = state.host()?;
+        let emitter = HookProgressEmitter::new(host, state.progress_registry());
         let hook_result = guard
             .run_pre_rebase(&options.onto, current_branch.as_deref(), Some(&emitter))
             .await;
@@ -216,8 +216,8 @@ pub async fn rebase_onto(
 
     // Run pre-rebase hook (can abort)
     if !skip_hooks {
-        let app_handle = state.get_app_handle()?;
-        let emitter = HookProgressEmitter::new(app_handle, state.progress_registry());
+        let host = state.host()?;
+        let emitter = HookProgressEmitter::new(host, state.progress_registry());
         let hook_result = guard
             .run_pre_rebase(&options.new_base, current_branch.as_deref(), Some(&emitter))
             .await;
@@ -411,8 +411,8 @@ pub async fn interactive_rebase(
 
     // Run pre-rebase hook
     if !skip_hooks {
-        let app_handle = state.get_app_handle()?;
-        let emitter = HookProgressEmitter::new(app_handle, state.progress_registry());
+        let host = state.host()?;
+        let emitter = HookProgressEmitter::new(host, state.progress_registry());
         let hook_result = guard
             .run_pre_rebase(&options.onto, current_branch.as_deref(), Some(&emitter))
             .await;

@@ -1,4 +1,5 @@
 use crate::error::{AxisError, Result};
+use crate::host::HostHandle;
 use crate::models::{AppSettings, ListRemoteOptions, Repository, SshCredentials};
 use crate::services::ops::RepoOperations;
 use crate::services::{
@@ -15,7 +16,7 @@ use std::collections::HashMap;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 /// Wrapper that holds an `Arc<GitService>` and a shared `RwLock` for read/write coordination.
 ///
@@ -185,6 +186,8 @@ pub struct AppState {
     signature_verification_cache: Arc<SignatureVerificationCache>,
     database: Arc<Database>,
     app_handle: RwLock<Option<AppHandle>>,
+    host: RwLock<Option<HostHandle>>,
+    app_data_dir: RwLock<Option<PathBuf>>,
     background_fetch: BackgroundFetchService,
     avatar_service: RwLock<Option<Arc<AvatarService>>>,
     integration_service: RwLock<Option<Arc<IntegrationService>>>,
@@ -208,6 +211,8 @@ impl AppState {
             signature_verification_cache: Arc::new(SignatureVerificationCache::new()),
             database,
             app_handle: RwLock::new(None),
+            host: RwLock::new(None),
+            app_data_dir: RwLock::new(None),
             background_fetch: BackgroundFetchService::new(),
             avatar_service: RwLock::new(None),
             integration_service: RwLock::new(Some(Arc::new(integration_service))),
@@ -218,19 +223,39 @@ impl AppState {
         }
     }
 
-    /// Set the app handle (must be called after Tauri setup)
-    pub fn set_app_handle(&self, app_handle: AppHandle) {
-        // Initialize avatar service with app data dir
-        if let Ok(app_data_dir) = app_handle.path().app_data_dir() {
-            let avatar_service = AvatarService::new(&app_data_dir);
-            *self.avatar_service.write() = Some(Arc::new(avatar_service));
-        }
+    /// Attach the host and app data directory (must be called during setup)
+    pub fn attach_host(&self, host: HostHandle, app_data_dir: PathBuf) {
+        let avatar_service = AvatarService::new(&app_data_dir);
+        *self.avatar_service.write() = Some(Arc::new(avatar_service));
+        *self.host.write() = Some(host);
+        *self.app_data_dir.write() = Some(app_data_dir);
+    }
 
+    /// Get the host for emitting events and opening URLs
+    pub fn host(&self) -> Result<HostHandle> {
+        self.host
+            .read()
+            .clone()
+            .ok_or_else(|| AxisError::Other("Host not attached".to_string()))
+    }
+
+    /// Get the app data directory
+    // Not yet called outside tests: custom_actions commands switch to it in Task 6.
+    #[allow(dead_code)]
+    pub fn app_data_dir(&self) -> Result<PathBuf> {
+        self.app_data_dir
+            .read()
+            .clone()
+            .ok_or_else(|| AxisError::Other("Host not attached".to_string()))
+    }
+
+    /// Set the app handle; kept only for the file watcher and background fetch until they take a Host
+    pub fn set_app_handle(&self, app_handle: AppHandle) {
         *self.app_handle.write() = Some(app_handle);
     }
 
-    /// Get the app handle
-    pub fn get_app_handle(&self) -> Result<AppHandle> {
+    /// Get the app handle (only for the file watcher and background fetch)
+    fn get_app_handle(&self) -> Result<AppHandle> {
         self.app_handle
             .read()
             .clone()
@@ -512,6 +537,8 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::events::RefChangedEvent;
+    use crate::host::{self, RecordingHost};
     use std::path::PathBuf;
 
     // ==================== RepositoryCache Tests ====================
@@ -614,6 +641,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn host_before_attach_is_error() {
+        let db = crate::storage::Database::open_in_memory()
+            .await
+            .expect("should create in-memory db");
+        let state = AppState::new(db);
+
+        assert!(matches!(state.host(), Err(AxisError::Other(m)) if m == "Host not attached"));
+        assert!(
+            matches!(state.app_data_dir(), Err(AxisError::Other(m)) if m == "Host not attached")
+        );
+
+        *state.active_repository_path.write() = Some(PathBuf::from("/test/repo"));
+        assert!(matches!(state.get_git_service(), Err(AxisError::Other(_))));
+    }
+
+    #[tokio::test]
+    async fn attach_host_sets_host_dir_and_avatar_service() {
+        let db = crate::storage::Database::open_in_memory()
+            .await
+            .expect("should create in-memory db");
+        let state = AppState::new(db);
+        let dir = tempfile::tempdir().expect("should create temp dir");
+        let recorder = RecordingHost::new();
+
+        state.attach_host(recorder.clone(), dir.path().to_path_buf());
+
+        let attached = state.host().expect("host should be attached");
+        host::emit(
+            attached.as_ref(),
+            &RefChangedEvent {
+                ref_name: "refs/heads/main".into(),
+            },
+        );
+        assert_eq!(recorder.names(), ["ref-changed-event"]);
+        assert_eq!(
+            state.app_data_dir().expect("app data dir should be set"),
+            dir.path()
+        );
+        assert!(state.avatar_service().is_ok());
+    }
+
+    #[tokio::test]
     async fn test_app_state_close_current_repository() {
         let db = crate::storage::Database::open_in_memory()
             .await
@@ -679,7 +748,7 @@ mod tests {
             .expect("should create in-memory db");
         let state = AppState::new(db);
 
-        // Avatar service is not initialized until set_app_handle is called
+        // Avatar service is not initialized until attach_host is called
         let result = state.avatar_service();
         assert!(result.is_err());
     }

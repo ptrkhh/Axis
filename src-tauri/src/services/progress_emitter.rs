@@ -4,24 +4,22 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tauri::AppHandle;
-use tauri_specta::Event;
-
 use crate::events::{GitOperationProgressEvent, GitOperationType, ProgressStage};
+use crate::host::{self, HostHandle};
 
 const THROTTLE_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Manages progress event emission with throttling and cancellation support
 pub struct ProgressEmitter {
-    app_handle: AppHandle,
+    host: HostHandle,
     last_emit: Mutex<HashMap<String, Instant>>,
     cancelled: HashMap<String, Arc<AtomicBool>>,
 }
 
 impl ProgressEmitter {
-    pub fn new(app_handle: AppHandle, operation_id: &str, cancel_token: Arc<AtomicBool>) -> Self {
+    pub fn new(host: HostHandle, operation_id: &str, cancel_token: Arc<AtomicBool>) -> Self {
         Self {
-            app_handle,
+            host,
             last_emit: Mutex::new(HashMap::new()),
             cancelled: HashMap::from([(operation_id.to_string(), cancel_token)]),
         }
@@ -59,9 +57,7 @@ impl ProgressEmitter {
         };
 
         if should_emit {
-            if let Err(e) = event.emit(&self.app_handle) {
-                log::error!("Failed to emit progress event: {e}");
-            }
+            host::emit(self.host.as_ref(), event);
         }
 
         // Return whether operation should continue (false = cancelled)
@@ -148,11 +144,11 @@ pub struct ProgressContext {
 }
 
 impl ProgressContext {
-    pub fn new(app_handle: AppHandle, registry: Arc<ProgressRegistry>) -> Self {
+    pub fn new(host: HostHandle, registry: Arc<ProgressRegistry>) -> Self {
         let operation_id = uuid::Uuid::new_v4().to_string();
         let cancel_token = registry.register(&operation_id);
         let emitter = Arc::new(ProgressEmitter::new(
-            app_handle,
+            host,
             &operation_id,
             cancel_token.clone(),
         ));
@@ -320,6 +316,17 @@ impl Default for ProgressRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::host::RecordingHost;
+
+    #[test]
+    fn emit_complete_reaches_host() {
+        let host = RecordingHost::new();
+        let ctx = ProgressContext::new(host.clone(), Arc::new(ProgressRegistry::new()));
+
+        ctx.emit_complete(GitOperationType::Fetch);
+
+        assert_eq!(host.names(), ["git-operation-progress-event"]);
+    }
 
     // ==================== ProgressRegistry Tests ====================
 

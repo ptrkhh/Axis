@@ -106,11 +106,11 @@ pub async fn create_commit(
     let mut final_message = message.clone();
 
     if !skip_hooks {
-        let app_handle = state.get_app_handle()?;
+        let host = state.host()?;
         let registry = state.progress_registry();
 
         // 1. Run pre-commit hook with progress emitter
-        let emitter = HookProgressEmitter::new(app_handle.clone(), registry.clone());
+        let emitter = HookProgressEmitter::new(host.clone(), registry.clone());
         let result = guard.run_pre_commit(Some(&emitter)).await;
 
         if result.is_cancelled() {
@@ -125,7 +125,7 @@ pub async fn create_commit(
         let msg_file = path.join(".git/COMMIT_EDITMSG");
         fs::write(&msg_file, &message)?;
 
-        let emitter = HookProgressEmitter::new(app_handle.clone(), registry.clone());
+        let emitter = HookProgressEmitter::new(host.clone(), registry.clone());
         let msg_file_clone = msg_file.clone();
         let result = guard
             .run_prepare_commit_msg(&msg_file_clone, None, None, Some(&emitter))
@@ -145,7 +145,7 @@ pub async fn create_commit(
         }
 
         // 3. Run commit-msg hook
-        let emitter = HookProgressEmitter::new(app_handle.clone(), registry.clone());
+        let emitter = HookProgressEmitter::new(host.clone(), registry.clone());
         let msg_file_clone = msg_file.clone();
         let result = guard.run_commit_msg(&msg_file_clone, Some(&emitter)).await;
 
@@ -196,8 +196,8 @@ pub async fn create_commit(
 
     // 5. Run post-commit hook (don't fail on error, just log)
     if !skip_hooks {
-        let app_handle = state.get_app_handle()?;
-        let emitter = HookProgressEmitter::new(app_handle, state.progress_registry());
+        let host = state.host()?;
+        let emitter = HookProgressEmitter::new(host, state.progress_registry());
         let result = guard.run_post_commit(Some(&emitter)).await;
         if !result.skipped && !result.success {
             log::warn!("post-commit hook failed: {}", result.stderr);
@@ -235,8 +235,8 @@ pub async fn amend_commit(
         let msg_file = path.join(".git/COMMIT_EDITMSG");
         fs::write(&msg_file, msg)?;
 
-        let app_handle = state.get_app_handle()?;
-        let emitter = HookProgressEmitter::new(app_handle, state.progress_registry());
+        let host = state.host()?;
+        let emitter = HookProgressEmitter::new(host, state.progress_registry());
         let msg_file_clone = msg_file.clone();
         let result = guard.run_commit_msg(&msg_file_clone, Some(&emitter)).await;
 
@@ -260,8 +260,8 @@ pub async fn amend_commit(
     // Run post-rewrite hook
     if !skip_hooks {
         if let Some(old) = old_oid {
-            let app_handle = state.get_app_handle()?;
-            let emitter = HookProgressEmitter::new(app_handle, state.progress_registry());
+            let host = state.host()?;
+            let emitter = HookProgressEmitter::new(host, state.progress_registry());
             let rewrites = format!("{old} {new_oid}\n");
             let result = guard
                 .run_post_rewrite("amend", &rewrites, Some(&emitter))

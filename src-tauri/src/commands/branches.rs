@@ -81,8 +81,8 @@ pub async fn checkout_branch(
 
     // Run post-checkout hook (informational, don't fail on error)
     if !settings.bypass_hooks {
-        let app_handle = state.get_app_handle()?;
-        let emitter = HookProgressEmitter::new(app_handle, state.progress_registry());
+        let host = state.host()?;
+        let emitter = HookProgressEmitter::new(host, state.progress_registry());
         let new_head = guard.get_head_oid().await;
         let result = guard
             .run_post_checkout(&prev_head, &new_head, true, Some(&emitter))
@@ -120,8 +120,8 @@ pub async fn checkout_remote_branch(
 
     // Run post-checkout hook (informational, don't fail on error)
     if !settings.bypass_hooks {
-        let app_handle = state.get_app_handle()?;
-        let emitter = HookProgressEmitter::new(app_handle, state.progress_registry());
+        let host = state.host()?;
+        let emitter = HookProgressEmitter::new(host, state.progress_registry());
         let new_head = guard.get_head_oid().await;
         let result = guard
             .run_post_checkout(&prev_head, &new_head, true, Some(&emitter))
