@@ -102,7 +102,12 @@ Android 16 / SDK 36, as the `adb shell` user:
   `/system/etc/security/cacerts`), parse them in memory with
   `openssl::x509::X509::stack_from_pem`, and register each with
   `libgit2_sys::git_libgit2_opts(GIT_OPT_ADD_SSL_X509_CERT, cert_ptr)` (after
-  libgit2 is initialised). 120 certs loaded; clone and fetch then succeeded.
+  libgit2 is initialised). `libgit2-sys` 0.18.5 does not export
+  `GIT_OPT_ADD_SSL_X509_CERT`; the agent defines a local constant `45` (the
+  value in libgit2's `git2/common.h`, one past
+  `GIT_OPT_GET_USER_AGENT_PRODUCT` = 44) and must re-check it whenever
+  `libgit2-sys` is upgraded. 120 certs loaded; clone and fetch then
+  succeeded.
 - **Not yet verified:** running inside Termux's own user (Termux `$HOME`,
   Termux `git` on `PATH`, SSH keys / `ssh-agent`). Verifying this on device is
   the first build step. Include the `#!/bin/sh` scripts Axis writes (the
