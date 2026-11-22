@@ -90,6 +90,7 @@ tauri-plugin-webdriver = { version = "0.2", optional = true }
 
 [features]
 default = []
+agent = []
 integration = []
 e2e = ["tauri-plugin-webdriver"]
 

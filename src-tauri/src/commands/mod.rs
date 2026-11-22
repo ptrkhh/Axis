@@ -1,3 +1,6 @@
+#[macro_use]
+mod macros;
+
 mod ai;
 mod avatar;
 mod bisect;
